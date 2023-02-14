@@ -1,0 +1,270 @@
+---
+version: "3.5"
+
+# YAML pointer feature to reuse parts of the config
+# https://medium.com/@kinghuang/docker-compose-anchors-aliases-extensions-a1e4105d70bd
+x-zookeeper-common-settings: &zookeeper-common-settings
+  ZOOKEEPER_CLIENT_PORT: 2181
+  ZOOKEEPER_TICK_TIME: 2000
+  ZOOKEEPER_INIT_LIMIT: 10 # total init limit (INIT_LIMIT * TICK_TIME)
+  ZOOKEEPER_SYNC_LIMIT: 4 # total sync limit  (SYNC_LIMIT * TICK_TIME)
+  ZOOKEEPER_SERVERS: zookeeper-1:2888:3888;zookeeper-2:2888:3888;zookeeper-3:2888:3888
+  KAFKA_OPTS: -Dzookeeper.4lw.commands.whitelist=*
+    -Djava.security.auth.login.config=/etc/zookeeper/secrets/zookeeper-server-jaas.config
+    -Dzookeeper.authProvider.1=org.apache.zookeeper.server.auth.SASLAuthenticationProvider
+    -Dzookeeper.allowSaslFailedClients=false
+    -Dzookeeper.requireClientAuthScheme=sasl
+
+x-broker-common-settings: &broker-common-settings
+  KAFKA_ZOOKEEPER_CONNECT: 'zookeeper-1:2181,zookeeper-2:2181,zookeeper-3:2181'
+  # listeners
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: DOCKER:SASL_PLAINTEXT,BROKER:SASL_PLAINTEXT,HOST:SASL_PLAINTEXT
+  KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+  # listener host
+  KAFKA_LISTENER_NAME_HOST_SASL_ENABLED_MECHANISMS: PLAIN
+  KAFKA_LISTENER_NAME_HOST_PLAIN_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required \
+    user_hostclient="hostclient-secret";
+  # metrics security
+  CONFLUENT_METRICS_REPORTER_SASL_MECHANISM: PLAIN
+  CONFLUENT_METRICS_REPORTER_SECURITY_PROTOCOL: SASL_PLAINTEXT
+  CONFLUENT_METRICS_REPORTER_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required \
+    username="controlcenter" \
+    password="controlcenter-secret";
+  # security listener docker
+  KAFKA_LISTENER_NAME_DOCKER_SASL_ENABLED_MECHANISMS: PLAIN
+  KAFKA_LISTENER_NAME_DOCKER_PLAIN_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required \
+    user_schemaregistry="schemaregistry-secret" \
+    user_controlcenter="controlcenter-secret";
+  # security listener interbroker
+  KAFKA_INTER_BROKER_LISTENER_NAME: BROKER
+  KAFKA_LISTENER_NAME_BROKER_SASL_ENABLED_MECHANISMS: PLAIN
+  KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+  # metrics
+  KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+  CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "kafka-1:9092,kafka-2:9092,kafka-3:9092"
+  CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+  CONFLUENT_METRICS_ENABLE: 'true'
+  # interesting features
+  KAFKA_DELETE_TOPIC_ENABLE: 'true'
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+  # security zookeeper
+  KAFKA_OPTS: -Djava.security.auth.login.config=/etc/kafka/secrets/kafka-client-jaas.config
+
+services:
+  zookeeper-1:
+    image: confluentinc/cp-zookeeper:${TAG}
+    hostname: zookeeper-1
+    container_name: zookeeper-1
+    ports:
+      - "12181:2181"
+      - "12180:12180"
+    networks:
+      - confluent
+    volumes:
+      - data-zookeeper-1-log:/var/lib/zookeeper/log
+      - data-zookeeper-1-data:/var/lib/zookeeper/data
+      - ${PWD}/zookeeper-jaas/zookeeper-jaas.config:/etc/zookeeper/secrets/zookeeper-server-jaas.config
+      - ${PWD}/zookeeper-overlay/zookeeper.properties.template:/etc/confluent/docker/zookeeper.properties.template
+    environment:
+      <<: *zookeeper-common-settings
+      ZOOKEEPER_SERVER_ID: 1
+      KAFKA_JMX_HOSTNAME: zookeeper-1
+      KAFKA_JMX_PORT: 12180
+
+  zookeeper-2:
+    image: confluentinc/cp-zookeeper:${TAG}
+    hostname: zookeeper-2
+    container_name: zookeeper-2
+    ports:
+      - "22181:2181"
+      - "22180:22180"
+    networks:
+      - confluent
+    volumes:
+      - data-zookeeper-2-log:/var/lib/zookeeper/log
+      - data-zookeeper-2-data:/var/lib/zookeeper/data
+      - ${PWD}/zookeeper-jaas/zookeeper-jaas.config:/etc/zookeeper/secrets/zookeeper-server-jaas.config
+      - ${PWD}/zookeeper-overlay/zookeeper.properties.template:/etc/confluent/docker/zookeeper.properties.template
+    environment:
+      <<: *zookeeper-common-settings
+      ZOOKEEPER_SERVER_ID: 2
+      KAFKA_JMX_HOSTNAME: zookeeper-2
+      KAFKA_JMX_PORT: 22180
+
+  zookeeper-3:
+    image: confluentinc/cp-zookeeper:${TAG}
+    hostname: zookeeper-3
+    container_name: zookeeper-3
+    ports:
+      - "32181:2181"
+      - "32180:32180"
+    networks:
+      - confluent
+    volumes:
+      - data-zookeeper-3-log:/var/lib/zookeeper/log
+      - data-zookeeper-3-data:/var/lib/zookeeper/data
+      - ${PWD}/zookeeper-jaas/zookeeper-jaas.config:/etc/zookeeper/secrets/zookeeper-server-jaas.config
+      - ${PWD}/zookeeper-overlay/zookeeper.properties.template:/etc/confluent/docker/zookeeper.properties.template
+      # test wrong credentials via zookeeper (uncomment the line below and comment the line above)
+      #- ${PWD}/zookeeper-jaas/zookeeper-jaas-wrong.config:/etc/zookeeper/secrets/zookeeper-server-jaas.config
+    environment:
+      <<: *zookeeper-common-settings
+      ZOOKEEPER_SERVER_ID: 3
+      KAFKA_JMX_HOSTNAME: zookeeper-3
+      KAFKA_JMX_PORT: 32180
+
+  kafka-1:
+    image:  confluentinc/cp-enterprise-kafka:${TAG}
+    hostname: kafka-1
+    container_name: kafka-1
+    ports:
+      - "19092:19092"
+      - "10091:10091"
+    networks:
+      - confluent
+    volumes:
+      - data-kafka-1:/var/lib/kafka/data
+      - ${PWD}/zookeeper-jaas/kafka-broker1-jaas.config:/etc/kafka/secrets/kafka-client-jaas.config
+    environment:
+      <<: *broker-common-settings
+      KAFKA_BROKER_ID: 101
+      # listeners
+      KAFKA_LISTENERS: DOCKER://:9092,BROKER://:9093,HOST://:19092
+      KAFKA_ADVERTISED_LISTENERS: DOCKER://kafka-1:9092,BROKER://kafka-1:9093,HOST://localhost:19092
+      # jmx
+      KAFKA_JMX_HOSTNAME: kafka-1
+      KAFKA_JMX_PORT: 10091
+      KAFKA_LISTENER_NAME_BROKER_PLAIN_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required \
+        username="broker1" \
+        password="broker1-secret" \
+        user_broker1="broker1-secret" \
+        user_broker2="broker2-secret" \
+        user_broker3="broker3-secret";
+
+  kafka-2:
+    image:  confluentinc/cp-enterprise-kafka:${TAG}
+    hostname: kafka-2
+    container_name: kafka-2
+    ports:
+      - "29092:29092"
+      - "20091:20091"
+    networks:
+      - confluent
+    volumes:
+      - data-kafka-2:/var/lib/kafka/data
+      - ${PWD}/zookeeper-jaas/kafka-broker2-jaas.config:/etc/kafka/secrets/kafka-client-jaas.config
+    environment:
+      <<: *broker-common-settings
+      KAFKA_BROKER_ID: 102
+      # listeners
+      KAFKA_LISTENERS: DOCKER://:9092,BROKER://:9093,HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: DOCKER://kafka-2:9092,BROKER://kafka-2:9093,HOST://localhost:29092
+      # jmx
+      KAFKA_JMX_HOSTNAME: kafka-2
+      KAFKA_JMX_PORT: 20091
+      KAFKA_LISTENER_NAME_BROKER_PLAIN_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required \
+        username="broker2" \
+        password="broker2-secret" \
+        user_broker1="broker1-secret" \
+        user_broker2="broker2-secret" \
+        user_broker3="broker3-secret";
+
+  kafka-3:
+    image:  confluentinc/cp-enterprise-kafka:${TAG}
+    hostname: kafka-3
+    container_name: kafka-3
+    ports:
+      - "39092:39092"
+      - "30091:30091"
+    networks:
+      - confluent
+    volumes:
+      - data-kafka-3:/var/lib/kafka/data
+      - ${PWD}/zookeeper-jaas/kafka-broker3-jaas.config:/etc/kafka/secrets/kafka-client-jaas.config
+    environment:
+      <<: *broker-common-settings
+      KAFKA_BROKER_ID: 103
+      # listeners
+      KAFKA_LISTENERS: DOCKER://:9092,BROKER://:9093,HOST://:39092
+      KAFKA_ADVERTISED_LISTENERS: DOCKER://kafka-3:9092,BROKER://kafka-3:9093,HOST://localhost:39092
+      # jmx
+      KAFKA_JMX_HOSTNAME: kafka-3
+      KAFKA_JMX_PORT: 30091
+      KAFKA_LISTENER_NAME_BROKER_PLAIN_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required \
+        username="broker3" \
+        password="broker3-secret" \
+        user_broker1="broker1-secret" \
+        user_broker2="broker2-secret" \
+        user_broker3="broker3-secret";
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:${TAG}
+    hostname: schema-registry
+    container_name: schema-registry
+    depends_on:
+      - kafka-1
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    networks:
+      - confluent
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "kafka-1:9092,kafka-2:9092,kafka-3:9092"
+      # JMX
+      SCHEMA_REGISTRY_JMX_HOSTNAME: schema-registry
+      SCHEMA_REGISTRY_JMX_PORT: 8080
+      # security
+      SCHEMA_REGISTRY_KAFKASTORE_SASL_MECHANISM: PLAIN
+      # Configure SASL_SSL if SSL encryption is enabled, otherwise configure SASL_PLAINTEXT
+      SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      SCHEMA_REGISTRY_KAFKASTORE_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required \
+          username="schemaregistry" \
+          password="schemaregistry-secret";
+
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:${TAG}
+    hostname: control-center
+    container_name: control-center
+    depends_on:
+      - kafka-1
+      - schema-registry
+    ports:
+      - "9021:9021"
+    networks:
+      - confluent
+    environment:
+      CONTROL_CENTER_REST_LISTENERS: http://0.0.0.0:9021
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+      CONTROL_CENTER_ZOOKEEPER_CONNECT: 'zookeeper-1:2181'
+      CONTROL_CENTER_STREAMS_NUM_STREAM_THREADS: 4
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      CONTROL_CENTER_UI_AUTOUPDATE_ENABLE: "false"
+      CONTROL_CENTER_COMMAND_TOPIC_REPLICATION: 1
+      CONTROL_CENTER_METRICS_TOPIC_REPLICATION: 1
+      # security
+      CONTROL_CENTER_STREAMS_SASL_MECHANISM: PLAIN
+      # Configure SASL_SSL if SSL encryption is enabled; otherwise configure SASL_PLAINTEXT
+      CONTROL_CENTER_STREAMS_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      CONTROL_CENTER_STREAMS_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required \
+        username="controlcenter" \
+        password="controlcenter-secret";
+
+volumes:
+  data-zookeeper-1-log:
+  data-zookeeper-2-log:
+  data-zookeeper-3-log:
+  data-zookeeper-1-data:
+  data-zookeeper-2-data:
+  data-zookeeper-3-data:
+  data-kafka-1:
+  data-kafka-2:
+  data-kafka-3:
+
+networks:
+  confluent:
